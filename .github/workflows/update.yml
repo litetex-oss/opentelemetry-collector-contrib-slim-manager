@@ -46,6 +46,12 @@ jobs:
           rm -rf .github
           git commit -a -m "Deleted .github folder"
 
+          rm -f receiver\prometheusreceiver\config_test.go
+          git commit -a -m "Deleted receiver\prometheusreceiver\config_test.go"
+
+          git apply ../remove-k8s-integration.patch
+          git commit -a -m "Removed k8s integration"
+
           mkdir -p .github/workflows
           curl --fail -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             https://raw.githubusercontent.com/litetex-oss/opentelemetry-collector-contrib-slim/refs/heads/master/.github/workflows/build-and-tag.yml \
