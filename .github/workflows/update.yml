@@ -52,6 +52,13 @@ jobs:
           git apply ../remove-k8s-integration.patch
           git commit -a -m "Removed k8s integration"
 
+          rm -f receiver/prometheusreceiver/factory_test.go
+          rm -f receiver/prometheusreceiver/metricsreceiver_api_server_test.go
+          git commit -a -m "[receiver/prometheusreceiver] Delete tests that require API server"
+
+          git apply ../remove-api-server.patch
+          git commit -a -m "[receiver/prometheusreceiver] Removed debugging API server"
+
           mkdir -p .github/workflows
           curl --fail -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             https://raw.githubusercontent.com/litetex-oss/opentelemetry-collector-contrib-slim/refs/heads/master/.github/workflows/build-and-tag.yml \
