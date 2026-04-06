@@ -46,8 +46,8 @@ jobs:
           rm -rf .github
           git commit -a -m "Deleted .github folder"
 
-          rm -f receiver\prometheusreceiver\config_test.go
-          git commit -a -m "Deleted receiver\prometheusreceiver\config_test.go"
+          rm -f receiver/prometheusreceiver/config_test.go
+          git commit -a -m "Deleted receiver/prometheusreceiver/config_test.go"
 
           git apply ../remove-k8s-integration.patch
           git commit -a -m "Removed k8s integration"
