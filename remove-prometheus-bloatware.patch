@@ -1,0 +1,359 @@
+diff --git a/receiver/prometheusreceiver/config.go b/receiver/prometheusreceiver/config.go
+index 9fd31d7efc..24f1699af6 100644
+--- a/receiver/prometheusreceiver/config.go
++++ b/receiver/prometheusreceiver/config.go
+@@ -16,9 +16,7 @@ import (
+ 	commonconfig "github.com/prometheus/common/config"
+ 	promconfig "github.com/prometheus/prometheus/config"
+ 	"github.com/prometheus/prometheus/discovery"
+-	"github.com/prometheus/prometheus/discovery/kubernetes"
+ 	"github.com/prometheus/prometheus/discovery/targetgroup"
+-	"go.opentelemetry.io/collector/config/confighttp"
+ 	"go.opentelemetry.io/collector/config/configoptional"
+ 	"go.opentelemetry.io/collector/confmap"
+ 
+@@ -32,11 +30,6 @@ type Config struct {
+ 
+ 	TargetAllocator configoptional.Optional[targetallocator.Config] `mapstructure:"target_allocator"`
+ 
+-	//  APIServer has the settings to enable the receiver to host the Prometheus API
+-	// server in agent mode. This allows the user to call the endpoint to get
+-	// the config, service discovery, and targets for debugging purposes.
+-	APIServer APIServer `mapstructure:"api_server"`
+-
+ 	// For testing only.
+ 	ignoreMetadata bool
+ 	skipOffsetting bool
+@@ -48,10 +41,6 @@ func (cfg *Config) Validate() error {
+ 		return errors.New("no Prometheus scrape_configs or target_allocator set")
+ 	}
+ 
+-	if err := cfg.APIServer.Validate(); err != nil {
+-		return fmt.Errorf("invalid API server configuration settings: %w", err)
+-	}
+-
+ 	return nil
+ }
+ 
+@@ -125,14 +114,6 @@ func (cfg *PromConfig) Validate() error {
+ 			if err := validateHTTPClientConfig(&sc.HTTPClientConfig); err != nil {
+ 				return err
+ 			}
+-
+-			for _, c := range sc.ServiceDiscoveryConfigs {
+-				if c, ok := c.(*kubernetes.SDConfig); ok {
+-					if err := validateHTTPClientConfig(&c.HTTPClientConfig); err != nil {
+-						return err
+-					}
+-				}
+-			}
+ 		}
+ 	}
+ 
+@@ -224,20 +205,3 @@ func checkTLSConfig(tlsConfig commonconfig.TLSConfig) error {
+ 	}
+ 	return nil
+ }
+-
+-type APIServer struct {
+-	Enabled      bool                    `mapstructure:"enabled"`
+-	ServerConfig confighttp.ServerConfig `mapstructure:"server_config"`
+-}
+-
+-func (cfg *APIServer) Validate() error {
+-	if !cfg.Enabled {
+-		return nil
+-	}
+-
+-	if cfg.ServerConfig.NetAddr.Endpoint == "" {
+-		return errors.New("if api_server is enabled, it requires a non-empty server_config endpoint")
+-	}
+-
+-	return nil
+-}
+diff --git a/receiver/prometheusreceiver/factory.go b/receiver/prometheusreceiver/factory.go
+index dad0662964..faf6447e86 100644
+--- a/receiver/prometheusreceiver/factory.go
++++ b/receiver/prometheusreceiver/factory.go
+@@ -9,8 +9,6 @@ import (
+ 	promconfig "github.com/prometheus/prometheus/config"
+ 	_ "github.com/prometheus/prometheus/plugins" // init() of this package registers service discovery impl.
+ 	"go.opentelemetry.io/collector/component"
+-	"go.opentelemetry.io/collector/config/confighttp"
+-	"go.opentelemetry.io/collector/config/confignet"
+ 	"go.opentelemetry.io/collector/consumer"
+ 	"go.opentelemetry.io/collector/receiver"
+ 	"go.uber.org/zap"
+@@ -27,18 +25,10 @@ func NewFactory() receiver.Factory {
+ }
+ 
+ func createDefaultConfig() component.Config {
+-	netAddr := confignet.NewDefaultAddrConfig()
+-	netAddr.Transport = confignet.TransportTypeTCP
+ 	return &Config{
+ 		PrometheusConfig: &PromConfig{
+ 			GlobalConfig: promconfig.DefaultGlobalConfig,
+ 		},
+-		APIServer: APIServer{
+-			Enabled: false,
+-			ServerConfig: confighttp.ServerConfig{
+-				NetAddr: netAddr,
+-			},
+-		},
+ 	}
+ }
+ 
+diff --git a/receiver/prometheusreceiver/metrics_receiver.go b/receiver/prometheusreceiver/metrics_receiver.go
+index 38e297f0b0..a0140acef1 100644
+--- a/receiver/prometheusreceiver/metrics_receiver.go
++++ b/receiver/prometheusreceiver/metrics_receiver.go
+@@ -9,42 +9,24 @@ import (
+ 	"fmt"
+ 	"log/slog"
+ 	"net/http"
+-	"net/url"
+-	"os"
+ 	"reflect"
+-	"runtime"
+-	"runtime/debug"
+-	"strings"
+ 	"sync"
+ 	"time"
+ 	"unsafe"
+ 
+-	grafanaRegexp "github.com/grafana/regexp"
+-	"github.com/mwitkow/go-conntrack"
+ 	"github.com/prometheus/client_golang/prometheus"
+-	"github.com/prometheus/client_golang/prometheus/promhttp"
+ 	commonconfig "github.com/prometheus/common/config"
+ 	"github.com/prometheus/common/model"
+-	"github.com/prometheus/common/promslog"
+-	"github.com/prometheus/common/route"
+-	"github.com/prometheus/common/version"
+-	toolkit_web "github.com/prometheus/exporter-toolkit/web"
+ 	promconfig "github.com/prometheus/prometheus/config"
+ 	"github.com/prometheus/prometheus/discovery"
+-	"github.com/prometheus/prometheus/promql/parser"
+ 	"github.com/prometheus/prometheus/scrape"
+-	"github.com/prometheus/prometheus/storage"
+ 	"github.com/prometheus/prometheus/util/httputil"
+-	"github.com/prometheus/prometheus/web"
+-	api_v1 "github.com/prometheus/prometheus/web/api/v1"
+ 	"go.opentelemetry.io/collector/component"
+ 	"go.opentelemetry.io/collector/component/componentstatus"
+ 	"go.opentelemetry.io/collector/consumer"
+ 	"go.opentelemetry.io/collector/receiver"
+-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+ 	"go.uber.org/zap"
+ 	"go.uber.org/zap/exp/zapslog"
+-	"golang.org/x/net/netutil"
+ 
+ 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver/internal"
+ 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver/internal/metadata"
+@@ -72,7 +54,6 @@ type pReceiver struct {
+ 	scrapeManager          *scrape.Manager
+ 	discoveryManager       *discovery.Manager
+ 	targetAllocatorManager *targetallocator.Manager
+-	apiServer              *http.Server
+ 	registry               *prometheus.Registry
+ 	registerer             prometheus.Registerer
+ 	unregisterMetrics      func()
+@@ -128,13 +109,6 @@ func (r *pReceiver) start(ctx context.Context, host component.Host, opts prometh
+ 		return err
+ 	}
+ 
+-	if r.cfg.APIServer.Enabled {
+-		err = r.initAPIServer(discoveryCtx, host)
+-		if err != nil {
+-			r.settings.Logger.Error("Failed to initAPIServer", zap.Error(err))
+-		}
+-	}
+-
+ 	r.loadConfigOnce.Do(func() {
+ 		close(r.configLoaded)
+ 	})
+@@ -234,171 +208,6 @@ func (r *pReceiver) initScrapeOptions(o prometheusScrapeTestOptions) *scrape.Opt
+ 	return opts
+ }
+ 
+-func (r *pReceiver) initAPIServer(ctx context.Context, host component.Host) error {
+-	r.settings.Logger.Info("Starting Prometheus API server")
+-
+-	// If allowed CORS origins are provided in the receiver config, combine them into a single regex since the Prometheus API server requires this format.
+-	var corsOriginRegexp *grafanaRegexp.Regexp
+-	if r.cfg.APIServer.ServerConfig.CORS.HasValue() && len(r.cfg.APIServer.ServerConfig.CORS.Get().AllowedOrigins) > 0 {
+-		var combinedOriginsBuilder strings.Builder
+-		combinedOriginsBuilder.WriteString(r.cfg.APIServer.ServerConfig.CORS.Get().AllowedOrigins[0])
+-		for _, origin := range r.cfg.APIServer.ServerConfig.CORS.Get().AllowedOrigins[1:] {
+-			combinedOriginsBuilder.WriteString("|")
+-			combinedOriginsBuilder.WriteString(origin)
+-		}
+-		combinedRegexp, err := grafanaRegexp.Compile(combinedOriginsBuilder.String())
+-		if err != nil {
+-			return fmt.Errorf("failed to compile combined CORS allowed origins into regex: %s", err.Error())
+-		}
+-		corsOriginRegexp = combinedRegexp
+-	}
+-
+-	// If read timeout is not set in the receiver config, use the default Prometheus value.
+-	readTimeout := r.cfg.APIServer.ServerConfig.ReadTimeout
+-	if readTimeout == 0 {
+-		readTimeout = time.Duration(readTimeoutMinutes) * time.Minute
+-	}
+-
+-	o := &web.Options{
+-		ScrapeManager:   r.scrapeManager,
+-		Context:         ctx,
+-		ListenAddresses: []string{r.cfg.APIServer.ServerConfig.NetAddr.Endpoint},
+-		ExternalURL: &url.URL{
+-			Scheme: "http",
+-			Host:   r.cfg.APIServer.ServerConfig.NetAddr.Endpoint,
+-			Path:   "",
+-		},
+-		RoutePrefix:    "/",
+-		ReadTimeout:    readTimeout,
+-		PageTitle:      "Prometheus Receiver",
+-		Flags:          make(map[string]string),
+-		MaxConnections: maxConnections,
+-		IsAgent:        true,
+-		Registerer:     r.registerer,
+-		Gatherer:       r.registry,
+-		CORSOrigin:     corsOriginRegexp,
+-	}
+-
+-	// Creates the API object in the same way as the Prometheus web package: https://github.com/prometheus/prometheus/blob/6150e1ca0ede508e56414363cc9062ef522db518/web/web.go#L314-L354
+-	// Anything not defined by the options above will be nil, such as o.QueryEngine, o.Storage, etc. IsAgent=true, so these being nil is expected by Prometheus.
+-	factorySPr := func(_ context.Context) api_v1.ScrapePoolsRetriever { return o.ScrapeManager }
+-	factoryTr := func(_ context.Context) api_v1.TargetRetriever { return o.ScrapeManager }
+-	factoryAr := func(_ context.Context) api_v1.AlertmanagerRetriever { return nil }
+-	factoryRr := func(_ context.Context) api_v1.RulesRetriever { return nil }
+-	var app storage.Appendable
+-	var appV2 storage.AppendableV2
+-	logger := promslog.NewNopLogger()
+-
+-	apiV1 := api_v1.NewAPI(o.QueryEngine, o.Storage, app, appV2, o.ExemplarStorage, factorySPr, factoryTr, factoryAr,
+-
+-		// This ensures that any changes to the config made, even by the target allocator, are reflected in the API.
+-		func() promconfig.Config {
+-			return *(*promconfig.Config)(r.cfg.PrometheusConfig)
+-		},
+-		o.Flags, // nil
+-		api_v1.GlobalURLOptions{
+-			ListenAddress: o.ListenAddresses[0],
+-			Host:          o.ExternalURL.Host,
+-			Scheme:        o.ExternalURL.Scheme,
+-		},
+-		func(f http.HandlerFunc) http.HandlerFunc {
+-			return func(w http.ResponseWriter, r *http.Request) {
+-				f(w, r)
+-			}
+-		},
+-		o.LocalStorage,   // nil
+-		o.TSDBDir,        // nil
+-		o.EnableAdminAPI, // nil
+-		logger,
+-		factoryRr,
+-		o.RemoteReadSampleLimit,      // nil
+-		o.RemoteReadConcurrencyLimit, // nil
+-		o.RemoteReadBytesInFrame,     // nil
+-		o.IsAgent,
+-		o.CORSOrigin,
+-		func() (api_v1.RuntimeInfo, error) {
+-			status := api_v1.RuntimeInfo{
+-				GoroutineCount: runtime.NumGoroutine(),
+-				GOMAXPROCS:     runtime.GOMAXPROCS(0),
+-				GOMEMLIMIT:     debug.SetMemoryLimit(-1),
+-				GOGC:           os.Getenv("GOGC"),
+-				GODEBUG:        os.Getenv("GODEBUG"),
+-			}
+-
+-			return status, nil
+-		},
+-		&api_v1.PrometheusVersion{
+-			Version:   version.Version,
+-			Revision:  version.Revision,
+-			Branch:    version.Branch,
+-			BuildUser: version.BuildUser,
+-			BuildDate: version.BuildDate,
+-			GoVersion: version.GoVersion,
+-		},
+-		o.NotificationsGetter,
+-		o.NotificationsSub,
+-		o.Gatherer,
+-		o.Registerer,
+-		nil, // StatsRenderer
+-		o.EnableRemoteWriteReceiver,
+-		o.AcceptRemoteWriteProtoMsgs,
+-		o.EnableOTLPWriteReceiver,
+-		o.ConvertOTLPDelta,
+-		o.NativeOTLPDeltaIngestion,
+-		o.STZeroIngestionEnabled,
+-		5*time.Minute, // LookbackDelta - Using the default value of 5 minutes
+-		o.EnableTypeAndUnitLabels,
+-		false, // appendMetadata from remote write
+-		nil,   // OverrideErrorCode
+-		nil,   // FeatureRegistry
+-		api_v1.OpenAPIOptions{},
+-		parser.NewParser(parser.Options{}),
+-	)
+-
+-	// Create listener and monitor with conntrack in the same way as the Prometheus web package: https://github.com/prometheus/prometheus/blob/6150e1ca0ede508e56414363cc9062ef522db518/web/web.go#L564-L579
+-	listener, err := r.cfg.APIServer.ServerConfig.ToListener(ctx)
+-	if err != nil {
+-		return fmt.Errorf("failed to create listener: %s", err.Error())
+-	}
+-	listener = netutil.LimitListener(listener, o.MaxConnections)
+-	listener = conntrack.NewListener(listener,
+-		conntrack.TrackWithName("http"),
+-		conntrack.TrackWithTracing())
+-
+-	// Run the API server in the same way as the Prometheus web package: https://github.com/prometheus/prometheus/blob/6150e1ca0ede508e56414363cc9062ef522db518/web/web.go#L582-L630
+-	mux := http.NewServeMux()
+-	promHandler := promhttp.HandlerFor(o.Gatherer, promhttp.HandlerOpts{Registry: o.Registerer})
+-	mux.Handle("/metrics", promHandler)
+-
+-	// This is the path the web package uses, but the router above with no prefix can also be Registered by apiV1 instead.
+-	apiPath := "/api"
+-	if o.RoutePrefix != "/" {
+-		apiPath = o.RoutePrefix + apiPath
+-		logger.Info("Router prefix", "prefix", o.RoutePrefix)
+-	}
+-	av1 := route.New().
+-		WithInstrumentation(setPathWithPrefix(apiPath + "/v1"))
+-	apiV1.Register(av1)
+-	mux.Handle(apiPath+"/v1/", http.StripPrefix(apiPath+"/v1", av1))
+-
+-	spanNameFormatter := otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+-		return fmt.Sprintf("%s %s", r.Method, r.URL.Path)
+-	})
+-	r.apiServer, err = r.cfg.APIServer.ServerConfig.ToServer(ctx, host.GetExtensions(), r.settings.TelemetrySettings, otelhttp.NewHandler(mux, "", spanNameFormatter))
+-	if err != nil {
+-		return err
+-	}
+-	webconfig := ""
+-
+-	go func() {
+-		if err := toolkit_web.Serve(listener, r.apiServer, &toolkit_web.FlagConfig{WebConfigFile: &webconfig}, logger); err != nil {
+-			r.settings.Logger.Error("API server failed", zap.Error(err))
+-		}
+-	}()
+-
+-	return nil
+-}
+-
+ // Helper function from the Prometheus web package: https://github.com/prometheus/prometheus/blob/6150e1ca0ede508e56414363cc9062ef522db518/web/web.go#L582-L630
+ func setPathWithPrefix(prefix string) func(handlerName string, handler http.HandlerFunc) http.HandlerFunc {
+ 	return func(_ string, handler http.HandlerFunc) http.HandlerFunc {
+@@ -435,12 +244,6 @@ func (r *pReceiver) Shutdown(ctx context.Context) error {
+ 	if r.unregisterMetrics != nil {
+ 		r.unregisterMetrics()
+ 	}
+-	if r.apiServer != nil {
+-		err := r.apiServer.Shutdown(ctx)
+-		if err != nil {
+-			return err
+-		}
+-	}
+ 	return nil
+ }
+ 
