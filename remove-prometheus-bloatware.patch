@@ -104,7 +104,7 @@ index dad0662964..faf6447e86 100644
  }
  
 diff --git a/receiver/prometheusreceiver/metrics_receiver.go b/receiver/prometheusreceiver/metrics_receiver.go
-index 38e297f0b0..a0140acef1 100644
+index 35ef17d378..4ba6df28dd 100644
 --- a/receiver/prometheusreceiver/metrics_receiver.go
 +++ b/receiver/prometheusreceiver/metrics_receiver.go
 @@ -9,42 +9,24 @@ import (
@@ -248,14 +248,14 @@ index 38e297f0b0..a0140acef1 100644
 -				f(w, r)
 -			}
 -		},
--		o.LocalStorage,   // nil
--		o.TSDBDir,        // nil
--		o.EnableAdminAPI, // nil
+-		nil,              // TSDBAdminStats
+-		o.TSDBDir,        // ""
+-		o.EnableAdminAPI, // false
 -		logger,
 -		factoryRr,
--		o.RemoteReadSampleLimit,      // nil
--		o.RemoteReadConcurrencyLimit, // nil
--		o.RemoteReadBytesInFrame,     // nil
+-		o.RemoteReadSampleLimit,      // 0
+-		o.RemoteReadConcurrencyLimit, // 0
+-		o.RemoteReadBytesInFrame,     // 0
 -		o.IsAgent,
 -		o.CORSOrigin,
 -		func() (api_v1.RuntimeInfo, error) {
