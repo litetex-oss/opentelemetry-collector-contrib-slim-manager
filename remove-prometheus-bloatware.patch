@@ -1,8 +1,8 @@
 diff --git a/receiver/prometheusreceiver/config.go b/receiver/prometheusreceiver/config.go
-index 9fd31d7efc..24f1699af6 100644
+index a19495a922..e0931cc477 100644
 --- a/receiver/prometheusreceiver/config.go
 +++ b/receiver/prometheusreceiver/config.go
-@@ -16,9 +16,7 @@ import (
+@@ -17,9 +17,7 @@ import (
  	commonconfig "github.com/prometheus/common/config"
  	promconfig "github.com/prometheus/prometheus/config"
  	"github.com/prometheus/prometheus/discovery"
@@ -12,7 +12,7 @@ index 9fd31d7efc..24f1699af6 100644
  	"go.opentelemetry.io/collector/config/configoptional"
  	"go.opentelemetry.io/collector/confmap"
  
-@@ -32,11 +30,6 @@ type Config struct {
+@@ -33,11 +31,6 @@ type Config struct {
  
  	TargetAllocator configoptional.Optional[targetallocator.Config] `mapstructure:"target_allocator"`
  
@@ -21,10 +21,10 @@ index 9fd31d7efc..24f1699af6 100644
 -	// the config, service discovery, and targets for debugging purposes.
 -	APIServer APIServer `mapstructure:"api_server"`
 -
- 	// For testing only.
- 	ignoreMetadata bool
- 	skipOffsetting bool
-@@ -48,10 +41,6 @@ func (cfg *Config) Validate() error {
+ 	// ScrapeOnShutdown enables a final scrape before the receiver closes.
+ 	//
+ 	// NOTE: This final scrape ignores the configured scrape interval.
+@@ -63,10 +56,6 @@ func (cfg *Config) Validate() error {
  		return errors.New("no Prometheus scrape_configs or target_allocator set")
  	}
  
@@ -35,7 +35,7 @@ index 9fd31d7efc..24f1699af6 100644
  	return nil
  }
  
-@@ -125,14 +114,6 @@ func (cfg *PromConfig) Validate() error {
+@@ -140,14 +129,6 @@ func (cfg *PromConfig) Validate() error {
  			if err := validateHTTPClientConfig(&sc.HTTPClientConfig); err != nil {
  				return err
  			}
@@ -50,7 +50,7 @@ index 9fd31d7efc..24f1699af6 100644
  		}
  	}
  
-@@ -224,20 +205,3 @@ func checkTLSConfig(tlsConfig commonconfig.TLSConfig) error {
+@@ -239,20 +220,3 @@ func checkTLSConfig(tlsConfig commonconfig.TLSConfig) error {
  	}
  	return nil
  }
@@ -104,7 +104,7 @@ index dad0662964..faf6447e86 100644
  }
  
 diff --git a/receiver/prometheusreceiver/metrics_receiver.go b/receiver/prometheusreceiver/metrics_receiver.go
-index 35ef17d378..4ba6df28dd 100644
+index ee13bdb733..480e775400 100644
 --- a/receiver/prometheusreceiver/metrics_receiver.go
 +++ b/receiver/prometheusreceiver/metrics_receiver.go
 @@ -9,42 +9,24 @@ import (
@@ -172,7 +172,7 @@ index 35ef17d378..4ba6df28dd 100644
  	r.loadConfigOnce.Do(func() {
  		close(r.configLoaded)
  	})
-@@ -234,171 +208,6 @@ func (r *pReceiver) initScrapeOptions(o prometheusScrapeTestOptions) *scrape.Opt
+@@ -237,171 +211,6 @@ func (r *pReceiver) initScrapeOptions(o prometheusScrapeTestOptions) *scrape.Opt
  	return opts
  }
  
@@ -344,7 +344,7 @@ index 35ef17d378..4ba6df28dd 100644
  // Helper function from the Prometheus web package: https://github.com/prometheus/prometheus/blob/6150e1ca0ede508e56414363cc9062ef522db518/web/web.go#L582-L630
  func setPathWithPrefix(prefix string) func(handlerName string, handler http.HandlerFunc) http.HandlerFunc {
  	return func(_ string, handler http.HandlerFunc) http.HandlerFunc {
-@@ -435,12 +244,6 @@ func (r *pReceiver) Shutdown(ctx context.Context) error {
+@@ -438,12 +247,6 @@ func (r *pReceiver) Shutdown(ctx context.Context) error {
  	if r.unregisterMetrics != nil {
  		r.unregisterMetrics()
  	}
