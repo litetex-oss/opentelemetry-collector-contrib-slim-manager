@@ -53,7 +53,7 @@ jobs:
           git commit -a -m "Delete API server"
 
           rm -f receiver/prometheusreceiver/factory_test.go
-          rm -f receiver/prometheusreceiver/metrics_receiver_api_server_test.go
+          rm -f receiver/prometheusreceiver/metricsreceiver_api_server_test.go
           rm -f receiver/prometheusreceiver/metrics_receiver_config_pointer_test.go
           git commit -a -m "[receiver/prometheusreceiver] Delete tests that require API server"
 
